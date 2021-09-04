@@ -21,5 +21,9 @@ void test_validate_my_username()
 
     //TEST_ASSERT_TRUE_MESSAGE(false,"AESD students, please fix me!");
 
-   TEST_ASSERT_EQUAL_STRING_MESSAGE(my_username(), malloc_username_from_conf_file(), "SOME ERROR IN STRING COMPARE!");
+  char * conf_file_username = malloc_username_from_conf_file();
+
+   TEST_ASSERT_EQUAL_STRING_MESSAGE(my_username(), conf_file_username, "SOME ERROR IN STRING COMPARE!");
+
+	free(conf_file_username);
 }
