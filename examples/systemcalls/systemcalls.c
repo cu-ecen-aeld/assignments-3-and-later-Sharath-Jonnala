@@ -74,15 +74,10 @@ bool do_exec(int count, ...)
 	return false;
     } else if(pid == 0) {
 	//printf("ENTERIG IN PID 0\n");
-    	exec_ret = execv(command[0], command);
-	//printf("EXEC RETURN IS %d \n", exec_ret);
-	if(exec_ret == -1)
-    	{
-            //printf("EXITING AT EXEC_RET\n");
-            return false;
-    	}
-
-	return false;
+    	execv(command[0], command);
+	//printf("EXEC RETURN IS %d \n", exec_ret)
+  	exit(-1);
+	//return false;
     }
     else
     {
@@ -146,30 +141,41 @@ for(int j = 0 ; j < count - 1; j++)
  *
 */
 
-    va_end(args);
-
     int kpid;
     int wait_status;
-    int fd = open( outputfile, O_WRONLY|O_TRUNC|O_CREAT, S_IRWXU);
-    if (fd < 0) {
+    //int fd = open( outputfile, O_WRONLY|O_TRUNC|O_CREAT, S_IRWXU);
+    //printf("FD IS %d \n", fd);
+   
+/* if (fd < 0) {
 	perror("open");
-    }
-    kpid = fork(); 
+	return false;
+    }*/
+    kpid = fork();
     if(kpid == -1) return false;
     if(kpid == 0){
+	int fd = open( outputfile, O_WRONLY|O_TRUNC|O_CREAT, S_IRWXU);
 	if (dup2(fd, 1) < 0) {
 	   perror("dup2");
+	   return false;
 	}
     	close(fd);
-    	execv(command[0], command); perror("execvp");
-	return false;
-   }
+    	execv(command[0], command); perror("execv");
+	//return false;
+	exit(-1);
+   } 
+else {
+        int wait = waitpid(kpid, &wait_status, 0);
+        if(wait == -1) {
+            //printf("EXITING AT WAIT\n");
+            return false;
+        }
 
    if(WIFEXITED(wait_status)) {
         int exit_st = WEXITSTATUS(wait_status);
         if(exit_st != 0) return false;
         //printf("EXITING AT WAIT_STATUS\n");
    }
-
+}
+    va_end(args);
     return true;
 }
