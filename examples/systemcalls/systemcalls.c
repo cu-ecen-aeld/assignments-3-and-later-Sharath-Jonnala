@@ -145,11 +145,6 @@ for(int j = 0 ; j < count - 1; j++)
     int wait_status;
     //int fd = open( outputfile, O_WRONLY|O_TRUNC|O_CREAT, S_IRWXU);
     //printf("FD IS %d \n", fd);
-   
-/* if (fd < 0) {
-	perror("open");
-	return false;
-    }*/
     kpid = fork();
     if(kpid == -1) return false;
     if(kpid == 0){
@@ -160,9 +155,8 @@ for(int j = 0 ; j < count - 1; j++)
 	}
     	close(fd);
     	execv(command[0], command); perror("execv");
-	//return false;
 	exit(-1);
-   } 
+   }
 else {
         int wait = waitpid(kpid, &wait_status, 0);
         if(wait == -1) {
