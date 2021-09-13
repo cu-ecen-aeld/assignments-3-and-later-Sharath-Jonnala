@@ -21,6 +21,7 @@ else
 	echo "Using passed directory ${OUTDIR} for output"
 fi
 
+#mkdir
 mkdir -p ${OUTDIR}
 
 cd "$OUTDIR"
