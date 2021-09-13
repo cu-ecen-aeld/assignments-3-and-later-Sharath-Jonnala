@@ -60,12 +60,13 @@ loop_and_check_string() {
 
 ############ CALL FUNCTION TO START SEARC #########################
 #loop_and_check_string $filesdir
-#totalfiles=find $filesdir -type f | wc -l
-#linesmatch=grep -R $searchstr $filesdir | wc -l
-
 
 ################ PRINT TOTALFILES AND LINESMATCH #####################
 #printf "The number of files are %d and the number of matching lines are %d" ${totalfiles} ${linesmatch}
-#printf "The number of files are %d and the number of matching lines are %d" find $filesdir -type f | wc -l grep -R $searchstr $filesdir | wc -l
+
+
+
+
+########################################### Using find and grep for running in assignment 3 sh-bash compatibility###############################
 echo "The number of files are $(find $1 -type f | wc -l) and the number of matching lines are $(grep -R $2 $1 | wc -l)" #instead of functions we can directly use this line to get the results
 

@@ -35,14 +35,20 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     git checkout ${KERNEL_VERSION}
 
     # TODO: Add your kernel build steps here
+
+    # Deep clean the kernel build tree 
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
 
+    # Configure for the virtual dev board in use in QEMU
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
 
+    # Build a kernel image for booting in QEMU
     make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
 
+    # Build any kernel modules
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
 
+    # Build the device tree
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
@@ -101,24 +107,17 @@ ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 # TODO: Add library dependencies to rootfs
 export SYSROOT=$(aarch64-none-linux-gnu-gcc -print-sysroot)
 
-#cp -a $SYSROOT/lib/ld-linux-aarch64.so.1 lib
-
-#cp -a $SYSROOT/lib64/libm.so.6 lib64
-
-#cp -a $SYSROOT/lib64/libresolv.so.2 lib64
-
-#cp -a $SYSROOT/lib64/libc.so.6 lib64
-
-
 cp -L $SYSROOT/lib/ld-linux-aarch64.* lib
+
 cp -L $SYSROOT/lib64/libm.so.* lib64
+
 cp -L $SYSROOT/lib64/libresolv.so.* lib64
+
 cp -L $SYSROOT/lib64/libc.so.* lib64
 
-
-
-
 # TODO: Make device nodes
+
+#default devce nodes null and console
 
 sudo mknod -m 666 dev/null c 1 3
 
@@ -139,13 +138,9 @@ cp ./writer.sh ${OUTDIR}/rootfs/home
 
 cp ./autorun-qemu.sh ${OUTDIR}/rootfs/home
 
-#cp ~/Documents/AESD/Lab_git/assignments-3-and-later-Sharath-Jonnala/finder-app/dependencies.sh ${OUTDIR}/rootfs/home
-
 cp ./finder.sh ${OUTDIR}/rootfs/home
 
 cp ./finder-test.sh ${OUTDIR}/rootfs/home
-
-#cp ~/Documents/AESD/Lab_git/assignments-3-and-later-Sharath-Jonnala/finder-app/manual-linux.sh ${OUTDIR}/rootfs/home
 
 cp ./Makefile ${OUTDIR}/rootfs/home
 
