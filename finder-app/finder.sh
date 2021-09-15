@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 #DIRECTORY - ARGUMENT 1
 filesdir=$1
@@ -36,7 +36,7 @@ fi
 
 
 ############## FUNCTION THAT IS CALLED RECURSIVELY TO TRAVERSE THROUGH SUBFOLDERS AND SEARCH STRING ##############
-function loop_and_check_string() {
+loop_and_check_string() {
         if [ -d $1 ]
         then
 
@@ -59,12 +59,14 @@ function loop_and_check_string() {
 
 
 ############ CALL FUNCTION TO START SEARC #########################
-loop_and_check_string $filesdir
-
-
-
+#loop_and_check_string $filesdir
 
 ################ PRINT TOTALFILES AND LINESMATCH #####################
-printf "The number of files are %d and the number of matching lines are %d" ${totalfiles} ${linesmatch}
+#printf "The number of files are %d and the number of matching lines are %d" ${totalfiles} ${linesmatch}
 
+
+
+
+########################################### Using find and grep for running in assignment 3 sh-bash compatibility###############################
+echo "The number of files are $(find $1 -type f | wc -l) and the number of matching lines are $(grep -R $2 $1 | wc -l)" #instead of functions we can directly use this line to get the results
 
