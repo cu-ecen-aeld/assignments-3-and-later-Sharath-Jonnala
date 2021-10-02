@@ -17,7 +17,7 @@
 
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
-#define MAXDATASIZE 2000 // max number of bytes we can get at once 
+#define MAXDATASIZE 200 // max number of bytes we can get at once 
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd, client_fd, write_file_fd;
@@ -101,17 +101,6 @@ int main(int argc, char *argv[])
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
     addr_size = sizeof(their_addr);
-    char buf[MAXDATASIZE];
-
-
-        write_file_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
-
-        if (write_file_fd == -1)
-        {
-            syslog(LOG_ERR, "Error in opening file");
-        }
-
-
 
     while(1)
     {
@@ -131,22 +120,38 @@ int main(int argc, char *argv[])
         syslog(LOG_DEBUG,"Accepted connection from %s", ipstr);
 	int numbytes = 0;
 
+    	char *buf;
+
+    	buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+
+    	write_file_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
+
+    	if (write_file_fd == -1)
+    	{
+            syslog(LOG_ERR, "Error in opening file");
+    	}
+	int check_tot = 0;
+
 	do
 	{
-	    if ((numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0)) == -1) {
+	    numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0);
+	    if(numbytes == -1) {
         	perror("recv");
         	return -1;
-    	    }
+    	    } else {
+			check_tot +=numbytes;
+		}
+
 
 	} while(strchr(buf, '\n') == NULL);
-
+	printf("RECEIVING BYTES %d\n", check_tot);
 	buf[numbytes] = '\0';
 //write
 	//int buf_count = 0;
 	int wr;
 // seek
 	wr = write(write_file_fd, buf, numbytes);
-
+	printf("WRITING BYTES %d\n", wr);
 	if(wr == -1)
 	{
 	    syslog(LOG_ERR, "Error in writing to file");
@@ -154,10 +159,12 @@ int main(int argc, char *argv[])
 
 	lseek(write_file_fd, 0, SEEK_SET);
 
-	char write_buf[MAXDATASIZE];
-
+	//char write_buf[MAXDATASIZE];
+	char * write_buf;
+	write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
 
 	int read_byte = read(write_file_fd,write_buf, MAXDATASIZE); 
+	printf("READ BYTES ARE %d\n", read_byte);
 
 //read
 
@@ -170,6 +177,8 @@ int main(int argc, char *argv[])
             perror("send");
 
 	close(client_fd);
-
+	free(buf);
+	free(write_buf);
+	close(write_file_fd);
     }
 }
