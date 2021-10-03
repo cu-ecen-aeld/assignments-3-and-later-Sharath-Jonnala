@@ -256,12 +256,14 @@ int main(int argc, char *argv[])
 	    // Send the bytes that were just read from file
 	    send_bytes_check += read_byte;
             if (send(client_fd, write_buf,read_byte, 0) == -1)
+	    {
                 perror("send");
 		close(socket_fd);
 		closelog();
 		free(buf);
 		free(write_buf);
 		return -1;
+	    }
 	}
 
 	close(client_fd);
