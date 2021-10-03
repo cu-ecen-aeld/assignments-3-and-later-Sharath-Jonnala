@@ -17,7 +17,7 @@
 
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
-#define MAXDATASIZE 200 // max number of bytes we can get at once 
+#define MAXDATASIZE 100 // max number of bytes we can get at once 
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd, client_fd, write_file_fd;
@@ -40,7 +40,7 @@ static void signal_handler (int signo)
 {
     if (signo == SIGINT || signo == SIGTERM) {
 	syslog(LOG_NOTICE, "Caught signal, exiting\n");
-	/** TO-DO - somehow get socket fd here to shutdown */
+
 	close(write_file_fd);
 	remove(FILE_PATH);
 	shutdown(socket_fd, SHUT_RDWR);
@@ -102,11 +102,10 @@ int main(int argc, char *argv[])
     socklen_t addr_size;
     addr_size = sizeof(their_addr);
 
+    // This variable contains total bytes transferred over all connections
+    int check_tot = 0;
     while(1)
     {
-
-    // Opening file to write packets
-
 
 	client_fd = accept(socket_fd, (struct sockaddr *)&their_addr, &addr_size);
 
@@ -130,7 +129,7 @@ int main(int argc, char *argv[])
     	{
             syslog(LOG_ERR, "Error in opening file");
     	}
-	int check_tot = 0;
+
 
 	do
 	{
@@ -140,41 +139,41 @@ int main(int argc, char *argv[])
         	return -1;
     	    } else {
 			check_tot +=numbytes;
-		}
+			int wr;
+		        wr = write(write_file_fd, buf, numbytes);
 
+        		if(wr == -1)
+        		{
+            		    syslog(LOG_ERR, "Error in writing to file");
+        		}
 
+	    }
 	} while(strchr(buf, '\n') == NULL);
-	printf("RECEIVING BYTES %d\n", check_tot);
-	buf[numbytes] = '\0';
-//write
-	//int buf_count = 0;
-	int wr;
-// seek
-	wr = write(write_file_fd, buf, numbytes);
-	printf("WRITING BYTES %d\n", wr);
-	if(wr == -1)
-	{
-	    syslog(LOG_ERR, "Error in writing to file");
-	}
 
+	buf[check_tot] = '\0';
+
+	// Set cursor to beginning of file for reading
 	lseek(write_file_fd, 0, SEEK_SET);
 
-	//char write_buf[MAXDATASIZE];
+	// buffer used for reading from file and sending through socket
 	char * write_buf;
 	write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
 
-	int read_byte = read(write_file_fd,write_buf, MAXDATASIZE); 
-	printf("READ BYTES ARE %d\n", read_byte);
+	int send_bytes_check = 0;
 
-//read
 
-   	//if (close (write_file_fd) == -1)
-   	//{
-	 //   syslog(LOG_ERR, "Error in closing file");
-   	//}
-//send sic
-        if (send(client_fd, write_buf,read_byte, 0) == -1)
-            perror("send");
+	// Read and send bytes in batches/packets of MAXDATASIZE
+	while(send_bytes_check < check_tot)
+	{
+	    // seek the cursor read after the prev size of read
+	    lseek(write_file_fd, send_bytes_check, SEEK_SET);
+	    int read_byte = read(write_file_fd,write_buf, MAXDATASIZE); 
+
+	    // Send the bytes that were just read from file
+	    send_bytes_check += read_byte;
+            if (send(client_fd, write_buf,read_byte, 0) == -1)
+                perror("send");
+	}
 
 	close(client_fd);
 	free(buf);
