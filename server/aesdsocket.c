@@ -18,7 +18,7 @@
 
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
-#define MAXDATASIZE 500 // max number of bytes we can get at once
+#define MAXDATASIZE 1000 // max number of bytes we can get at once
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd, client_fd, write_file_fd;
