@@ -14,15 +14,17 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <ctype.h>
 
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
+#define MAXDATASIZE 100 // max number of bytes we can get at once
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd, client_fd, write_file_fd;
 struct addrinfo hints, *res;
 char ipstr[INET6_ADDRSTRLEN];
+uint8_t daemon_arg = 0;
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -58,11 +60,24 @@ static void signal_handler (int signo)
 
 int main(int argc, char *argv[])
 {
+
     openlog("aesdsocket.c", LOG_PID, LOG_USER);
     // Register signals with handler
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
+    int opt;
+    while ((opt = getopt(argc, argv,"d")) != -1) {
+        switch (opt) {
+            case 'd' :
+                daemon_arg = 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    int reuse_addr =1;
 
     socket_fd = socket(PF_INET, SOCK_STREAM, 0);
     if(socket_fd == -1)
@@ -71,8 +86,15 @@ int main(int argc, char *argv[])
 	return -1;
     }
 
+       // Reuse address
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(int)) == -1) {
+        syslog(LOG_ERR, "setsockopt");
+        close(socket_fd);
+        return -1;
+    }
+
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+    hints.ai_family = AF_INET;  // use IPv4 or IPv6, whichever
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
 
@@ -91,12 +113,50 @@ int main(int argc, char *argv[])
 
     freeaddrinfo(res); // free the linked list
 
+    if(daemon_arg)
+    {
+    	int pid = fork();
+
+    	if (pid < 0 )
+	    syslog(LOG_ERR, "Forking error\n");
+
+    	if(pid > 0)
+    	{
+	    syslog(LOG_DEBUG, "Daemon created\n");
+	    exit(EXIT_SUCCESS);
+    	}
+    	if(pid == 0)
+    	{
+	    int sid = setsid();
+
+            if(sid == -1)
+	    {
+	    	syslog(LOG_ERR, "Error in setting sid\n");
+	    	exit(EXIT_FAILURE);
+	    }
+
+            if (chdir("/") == -1)
+	    {
+            	syslog(LOG_ERR, "chdir");
+            	close(socket_fd);
+            	exit(EXIT_FAILURE);
+            }
+
+    	    int dev_null_fd = open("/dev/null", O_RDWR);
+            dup2(dev_null_fd, STDIN_FILENO);
+            dup2(dev_null_fd, STDOUT_FILENO);
+            dup2(dev_null_fd, STDERR_FILENO);
+
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+    	}
+    }
     if(listen(socket_fd,BACKLOG_CONNECTIONS) == -1)
     {
 	syslog(LOG_ERR, "Error in listen\n");
 	return -1;
     }
-
 
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
@@ -161,13 +221,12 @@ int main(int argc, char *argv[])
 
 	int send_bytes_check = 0;
 
-
 	// Read and send bytes in batches/packets of MAXDATASIZE
 	while(send_bytes_check < check_tot)
 	{
 	    // seek the cursor read after the prev size of read
 	    lseek(write_file_fd, send_bytes_check, SEEK_SET);
-	    int read_byte = read(write_file_fd,write_buf, MAXDATASIZE); 
+	    int read_byte = read(write_file_fd,write_buf, MAXDATASIZE);
 
 	    // Send the bytes that were just read from file
 	    send_bytes_check += read_byte;
