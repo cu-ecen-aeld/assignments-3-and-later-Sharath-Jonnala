@@ -83,6 +83,7 @@ int main(int argc, char *argv[])
     if(socket_fd == -1)
     {
 	syslog(LOG_ERR, "Error in capturing socket file descriptor\n");
+	closelog();
 	return -1;
     }
 
@@ -90,6 +91,7 @@ int main(int argc, char *argv[])
     if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(int)) == -1) {
         syslog(LOG_ERR, "setsockopt");
         close(socket_fd);
+	closelog();
         return -1;
     }
 
@@ -102,12 +104,16 @@ int main(int argc, char *argv[])
     if(getaddrinfo(NULL, PORT_NUMBER, &hints, &res) != 0)
     {
 	syslog(LOG_ERR, "Error in capturing address info\n");
+	close(socket_fd);
+	closelog();
 	return -1;
     }
 
     if(bind(socket_fd, res->ai_addr, res->ai_addrlen) == -1)
     {
 	syslog(LOG_ERR, "Error in binding\n");
+	close(socket_fd);
+	closelog();
 	return -1;
     }
 
@@ -132,6 +138,8 @@ int main(int argc, char *argv[])
             if(sid == -1)
 	    {
 	    	syslog(LOG_ERR, "Error in setting sid\n");
+		close(socket_fd);
+		closelog();
 	    	exit(EXIT_FAILURE);
 	    }
 
@@ -139,6 +147,7 @@ int main(int argc, char *argv[])
 	    {
             	syslog(LOG_ERR, "chdir");
             	close(socket_fd);
+		closelog();
             	exit(EXIT_FAILURE);
             }
 
@@ -155,6 +164,9 @@ int main(int argc, char *argv[])
     if(listen(socket_fd,BACKLOG_CONNECTIONS) == -1)
     {
 	syslog(LOG_ERR, "Error in listen\n");
+        close(socket_fd);
+        closelog();
+
 	return -1;
     }
 
@@ -172,6 +184,8 @@ int main(int argc, char *argv[])
 	if(client_fd == -1)
 	{
 	    syslog(LOG_ERR, "Error in retrieving client fd\n");
+            close(socket_fd);
+            closelog();
 	    return -1;
 	}
 
@@ -188,6 +202,10 @@ int main(int argc, char *argv[])
     	if (write_file_fd == -1)
     	{
             syslog(LOG_ERR, "Error in opening file");
+            close(socket_fd);
+            closelog();
+	    free(buf);
+	    return -1;
     	}
 
 
@@ -196,6 +214,9 @@ int main(int argc, char *argv[])
 	    numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0);
 	    if(numbytes == -1) {
         	perror("recv");
+		close(socket_fd);
+		closelog();
+		free(buf);
         	return -1;
     	    } else {
 			check_tot +=numbytes;
@@ -205,6 +226,10 @@ int main(int argc, char *argv[])
         		if(wr == -1)
         		{
             		    syslog(LOG_ERR, "Error in writing to file");
+			    close(socket_fd);
+			    closelog();
+			    free(buf);
+			    return -1;
         		}
 
 	    }
@@ -232,6 +257,11 @@ int main(int argc, char *argv[])
 	    send_bytes_check += read_byte;
             if (send(client_fd, write_buf,read_byte, 0) == -1)
                 perror("send");
+		close(socket_fd);
+		closelog();
+		free(buf);
+		free(write_buf);
+		return -1;
 	}
 
 	close(client_fd);
