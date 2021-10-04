@@ -18,7 +18,7 @@
 
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
-#define MAXDATASIZE 1000 // max number of bytes we can get at once
+#define MAXDATASIZE 500 // max number of bytes we can get at once
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 
 int socket_fd, client_fd, write_file_fd;
@@ -176,6 +176,33 @@ int main(int argc, char *argv[])
 
     // This variable contains total bytes transferred over all connections
     int check_tot = 0;
+    int realloc_count = 1;
+
+
+        char *buf;
+
+        buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+
+
+        char * write_buf;
+        write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+
+	write_file_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
+
+        if (write_file_fd == -1)
+        {
+        printf("2\n");
+            syslog(LOG_ERR, "Error in opening file");
+            close(socket_fd);
+            closelog();
+            free(buf);
+            free(write_buf);
+            return -1;
+        }
+
+
+
+
     while(1)
     {
 
@@ -183,6 +210,7 @@ int main(int argc, char *argv[])
 
 	if(client_fd == -1)
 	{
+		printf("1\n");
 	    syslog(LOG_ERR, "Error in retrieving client fd\n");
             close(socket_fd);
             closelog();
@@ -192,83 +220,127 @@ int main(int argc, char *argv[])
 	inet_ntop(AF_INET, get_in_addr((struct sockaddr *)&their_addr), ipstr, sizeof ipstr);
         syslog(LOG_DEBUG,"Accepted connection from %s", ipstr);
 	int numbytes = 0;
-
+/*
     	char *buf;
 
     	buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
 
-    	write_file_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
+
+        char * write_buf;
+        write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+
+*/
+
+
+/*    	write_file_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
 
     	if (write_file_fd == -1)
     	{
+	printf("2\n");
             syslog(LOG_ERR, "Error in opening file");
             close(socket_fd);
             closelog();
 	    free(buf);
+	    free(write_buf);
 	    return -1;
-    	}
+    	}*/
 
+	int buf_location = 0;
 
-	do
+	do //while((numbytes = recv(client_fd, buf + buf_location, MAXDATASIZE -1, 0)) > 0)
 	{
-	    numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0);
+	    numbytes = recv(client_fd, buf + buf_location, MAXDATASIZE, 0);
 	    if(numbytes == -1) {
+printf("3\n");
         	perror("recv");
 		close(socket_fd);
 		closelog();
 		free(buf);
+		free(write_buf);
         	return -1;
-    	    } else {
-			check_tot +=numbytes;
-			int wr;
-		        wr = write(write_file_fd, buf, numbytes);
+    	    }
+	    ++realloc_count;
+	    buf_location += numbytes;
+            check_tot +=numbytes;
+	    //char * temp_buf;
+            buf = (char *)realloc(buf, realloc_count*MAXDATASIZE*(sizeof(char)));
+	    if(buf == NULL)
+	    {
+printf("4\n");
+            	syslog(LOG_ERR, "Error in realloc");
+            	close(socket_fd);
+            	closelog();
+            	free(buf);
+		free(write_buf);
+            	return -1;
+       	     }
+//	     buf = temp_buf;
 
-        		if(wr == -1)
-        		{
-            		    syslog(LOG_ERR, "Error in writing to file");
-			    close(socket_fd);
-			    closelog();
-			    free(buf);
-			    return -1;
-        		}
 
-	    }
+	//	if(strchr(buf, '\n') != NULL) break;
 	} while(strchr(buf, '\n') == NULL);
+	buf[buf_location] = '\0';
+	//buf[check_tot] = '\0';
 
-	buf[check_tot] = '\0';
+        int wr;
+        wr = write(write_file_fd, buf, buf_location);
+        if(wr == -1)
+        {
+printf("5\n");
+            syslog(LOG_ERR, "Error in writing to file");
+            close(socket_fd);
+            closelog();
+            free(buf);
+	    free(write_buf);
+            return -1;
+        }
 
 	// Set cursor to beginning of file for reading
-	lseek(write_file_fd, 0, SEEK_SET);
+	//lseek(write_file_fd, 0, SEEK_SET);
 
 	// buffer used for reading from file and sending through socket
-	char * write_buf;
-	write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+	//int send_bytes_check = 0;
+	//char * temp_write_buf;
+	write_buf = (char *) realloc(write_buf, check_tot*(sizeof(char)));
+        if(write_buf == NULL)
+        {
+printf("6\n");
+            syslog(LOG_ERR, "Error in realloc");
+            close(socket_fd);
+            closelog();
+            free(buf);
+            free(write_buf);
+            return -1;
+         }
 
-	int send_bytes_check = 0;
-
+	//write_buf = temp_write_buf;
 	// Read and send bytes in batches/packets of MAXDATASIZE
-	while(send_bytes_check < check_tot)
-	{
+	//while(send_bytes_check < check_tot)
+	//{
 	    // seek the cursor read after the prev size of read
-	    lseek(write_file_fd, send_bytes_check, SEEK_SET);
-	    int read_byte = read(write_file_fd,write_buf, MAXDATASIZE);
+//	lseek(write_file_fd, send_bytes_check, SEEK_SET);
+	lseek(write_file_fd, 0, SEEK_SET);
+	int read_byte = read(write_file_fd,write_buf, check_tot);
 
 	    // Send the bytes that were just read from file
-	    send_bytes_check += read_byte;
-            if (send(client_fd, write_buf,read_byte, 0) == -1)
-	    {
-                perror("send");
-		close(socket_fd);
-		closelog();
-		free(buf);
-		free(write_buf);
-		return -1;
-	    }
+	//send_bytes_check += read_byte;
+        int send_bytes = send(client_fd, write_buf,read_byte, 0);
+	if(send_bytes == -1)
+	{
+printf("7\n");
+            perror("send");
+	    close(socket_fd);
+	    closelog();
+	    free(buf);
+	    free(write_buf);
+	    return -1;
 	}
+	//}
 
 	close(client_fd);
-	free(buf);
-	free(write_buf);
-	close(write_file_fd);
+	//free(buf);
+	//free(write_buf);
+	//close(write_file_fd);
     }
+    return 0;
 }
