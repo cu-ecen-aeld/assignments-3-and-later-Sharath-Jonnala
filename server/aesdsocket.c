@@ -188,10 +188,10 @@ int main(int argc, char *argv[])
     while(1)
     {
 
-	if (sigprocmask(SIG_BLOCK,&set,NULL) == -1){
-            perror("\nERROR sigprocmask():");
-            exit(-1);
-    	}
+//	if (sigprocmask(SIG_BLOCK,&set,NULL) == -1){
+  //          perror("\nERROR sigprocmask():");
+    //        exit(-1);
+    //	}
 
 	client_fd = accept(socket_fd, (struct sockaddr *)&their_addr, &addr_size);
 
@@ -261,7 +261,7 @@ int main(int argc, char *argv[])
 	int send_bytes_check = 0;
 
 	// Read and send bytes in batches/packets of MAXDATASIZE
-	while(send_bytes_check < check_tot || strchr(write_buf, '\n'))
+	while(send_bytes_check < check_tot || (strchr(write_buf, '\n') == NULL))
 	{
 	    // seek the cursor read after the prev size of read
 	    lseek(write_file_fd, send_bytes_check, SEEK_SET);
@@ -281,10 +281,10 @@ int main(int argc, char *argv[])
 	}
 
 
-        if (sigprocmask(SIG_UNBLOCK,&set,NULL) == -1){
-            perror("\nERROR sigprocmask():");
-            exit(-1);
-    	}
+      //  if (sigprocmask(SIG_UNBLOCK,&set,NULL) == -1){
+        //    perror("\nERROR sigprocmask():");
+          //  exit(-1);
+    	//}
 
 	close(client_fd);
 	free(buf);
