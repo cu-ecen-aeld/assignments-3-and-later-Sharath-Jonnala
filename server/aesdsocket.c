@@ -225,7 +225,7 @@ int main(int argc, char *argv[])
 
 	do
 	{
-	    numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0);
+	    numbytes = recv(client_fd, buf, MAXDATASIZE, 0);
 	    if(numbytes == -1) {
         	perror("recv");
 		close(socket_fd);
@@ -261,7 +261,7 @@ int main(int argc, char *argv[])
 	int send_bytes_check = 0;
 
 	// Read and send bytes in batches/packets of MAXDATASIZE
-	while(send_bytes_check < check_tot)
+	while(send_bytes_check < check_tot || strchr(write_buf, '\n'))
 	{
 	    // seek the cursor read after the prev size of read
 	    lseek(write_file_fd, send_bytes_check, SEEK_SET);
