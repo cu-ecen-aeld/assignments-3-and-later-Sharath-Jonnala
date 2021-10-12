@@ -44,6 +44,7 @@ typedef struct thread_data{
     char *transmit_buffer;
     sigset_t signal_mask;
     bool thread_complete_success;
+    pthread_mutex_t *mutex;
 }thread_data_t;
 
 pthread_mutex_t main_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -92,6 +93,13 @@ void close_all()
             free(datap->thread_parameters.transmit_buffer);
        	}
     }
+
+    int rc  = pthread_mutex_destroy(&main_mutex);
+    if(rc != 0)
+    {
+	printf("failed in destroying mutex\n");
+    }
+
 
     // free all linked list nodes
     while(!SLIST_EMPTY(&head))
@@ -570,6 +578,7 @@ int main(int argc, char *argv[])
 	datap->thread_parameters.client_fd = client_fd;
 	datap->thread_parameters.thread_complete_success = false;
 	datap->thread_parameters.signal_mask = signal_set;
+	datap->thread_parameters.mutex = &main_mutex;
 	//int numbytes = 0;
 
 	rc = pthread_create(&(datap->thread_parameters.thread_index), NULL, (void *)&receive_send_data, (void *) &(datap->thread_parameters)); // create pthread
