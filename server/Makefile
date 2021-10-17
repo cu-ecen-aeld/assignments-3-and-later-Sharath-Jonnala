@@ -1,9 +1,21 @@
-CC = $(CROSS_COMPILE)gcc
+ifeq ($(CC),)
+	CC = ${CROSS_COMPILE}gcc
+endif
 
-all: socket
+ifeq ($(CFLAGS),)
+	CFLAGS = -g -Wall -Werror 
+endif
 
-socket: aesdsocket.c
-	$(CC) -Wall -Werror -c -o aesdsocket.o aesdsocket.c
-	$(CC) -Wall -Werror -o aesdsocket aesdsocket.o
+ifeq ($(LDFLAGS),)
+	LDFLAGS = -pthread -lrt
+endif
+
+all: aesdsocket
+
+default: aesdsocket
+
+aesdsocket: aesdsocket.c
+	$(CC) $^ -o $@ $(INCLUDES) $(LDFLAGS) $(CFLAGS)
+
 clean:
-	rm -f aesdsocket aesdsocket.o
+	rm -f aesdsocket *.o
