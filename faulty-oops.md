@@ -7,21 +7,21 @@ Mem abort info:
 Data abort info:
   ISV = 0, ISS = 0x00000046
   CM = 0, WnR = 1
-user pgtable: 4k pages, 39-bit VAs, pgdp=0000000041fc9000
-[0000000000000000] pgd=0000000041fcc003, p4d=0000000041fcc003, pud=0000000041fcc003, pmd=0000000000000000
+user pgtable: 4k pages, 39-bit VAs, pgdp=0000000041fe2000
+[0000000000000000] pgd=0000000041fd4003, p4d=0000000041fd4003, pud=0000000041fd4003, pmd=0000000000000000
 Internal error: Oops: 96000046 [#1] SMP
 Modules linked in: hello(O) faulty(O) scull(O)
-CPU: 0 PID: 151 Comm: sh Tainted: G           O      5.10.7 #1
+CPU: 0 PID: 150 Comm: sh Tainted: G           O      5.10.7 #1
 Hardware name: linux,dummy-virt (DT)
 pstate: 80000005 (Nzcv daif -PAN -UAO -TCO BTYPE=--)
 pc : faulty_write+0x10/0x20 [faulty]
 lr : vfs_write+0xc0/0x290
-sp : ffffffc010c53db0
-x29: ffffffc010c53db0 x28: ffffff8001ff0c80 
+sp : ffffffc010c43db0
+x29: ffffffc010c43db0 x28: ffffff8002090000 
 x27: 0000000000000000 x26: 0000000000000000 
 x25: 0000000000000000 x24: 0000000000000000 
-x23: 0000000000000000 x22: ffffffc010c53e30 
-x21: 00000000004c9940 x20: ffffff8001fa5900 
+x23: 0000000000000000 x22: ffffffc010c43e30 
+x21: 00000000004c9940 x20: ffffff800203da00 
 x19: 0000000000000012 x18: 0000000000000000 
 x17: 0000000000000000 x16: 0000000000000000 
 x15: 0000000000000000 x14: 0000000000000000 
@@ -29,8 +29,8 @@ x13: 0000000000000000 x12: 0000000000000000
 x11: 0000000000000000 x10: 0000000000000000 
 x9 : 0000000000000000 x8 : 0000000000000000 
 x7 : 0000000000000000 x6 : 0000000000000000 
-x5 : ffffff800221dce8 x4 : ffffffc008677000 
-x3 : ffffffc010c53e30 x2 : 0000000000000012 
+x5 : ffffff8002041ce8 x4 : ffffffc008677000 
+x3 : ffffffc010c43e30 x2 : 0000000000000012 
 x1 : 0000000000000000 x0 : 0000000000000000 
 Call trace:
  faulty_write+0x10/0x20 [faulty]
@@ -42,7 +42,8 @@ Call trace:
  el0_sync_handler+0xb0/0xc0
  el0_sync+0x174/0x180
 Code: d2800001 d2800000 d503233f d50323bf (b900003f) 
----[ end trace 4d3318a3588c0a9c ]---
+---[ end trace 40862bb77fa620c0 ]---
+
 
 
 Analysis:
@@ -55,6 +56,6 @@ Line 14: CPU: 0 - This denotes on which CPU the error occurred.
 
 Line 17: program counter stopped at the instruction 10 bytes into faulty write function
 
-Line 19: Stack pointer pointing to ffffffc010c53db0
+Line 19: Stack pointer pointing to ffffffc010c43db0
 
 Line 36: The call trace  tells us that the faulty erorr occured 16 bytes into a function that is 32 bytes long and it was loaded from the 'faulty' module.
