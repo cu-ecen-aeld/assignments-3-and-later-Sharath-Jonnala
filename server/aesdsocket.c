@@ -1,65 +1,77 @@
-/**
- * @file    aesdsocket.c
- * @brief   Code to create a socket, receive packet. Local port 9000. Store in file, 
- *	    send it back to local client. accepts -d argument to run as daemon
- *	    in the background. SIGINT and SIGTERM are the only signals possible
- * 	    and are handled.
- *			
- * @author	Venkat Sai Krishna Tata
- * @Date	10/10/2021
- * @References: Textbook: Linux System Programming
- *		https://stackoverflow.com/questions/803776/help-comparing-an-argv-string
- *		https://beej.us/guide/bgnet/html/
- */
-
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include <syslog.h>
-#include <unistd.h>
 #include <signal.h>
-#include <sys/stat.h>
-#include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
-#include <fcntl.h>
-#include <sys/wait.h>
-#include <string.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <getopt.h>
-#include <time.h>
-#include <pthread.h>	
+#include <syslog.h>
 #include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <ctype.h>
 #include "queue.h"
+#include <pthread.h>
 #include <stdbool.h>
+#include <time.h>
 #include <sys/time.h>
+
+#define PORT_NUMBER "9000"
+#define BACKLOG_CONNECTIONS 6
+#define MAXDATASIZE 500 // max number of bytes we can get at once
+
+#define TIMER_BUFFER_SIZE 100
 
 #define USE_AESD_CHAR_DEVICE 1
 
-#define PORT "9000"
-#define CHUNK_SIZE 600
-#define BACKLOG 10
-
-#if USE_AESD_CHAR_DEVICE
-#   define TEST_FILE "/dev/aesdchar"
+#ifdef USE_AESD_CHAR_DEVICE
+#define FILE_PATH "/dev/aesdchar"
 #else
-#   define TEST_FILE "/var/tmp/aesdsocketdata"
+#define FILE_PATH "/var/tmp/aesdsocketdata"
 #endif
 
-#define BEGIN 0
+int socket_fd, client_fd, write_fd;
+struct addrinfo hints, *res;
+char ipstr[INET6_ADDRSTRLEN];
+uint8_t daemon_arg = 0;
+int terminate = 0;
+//slist_data_t *datap=NULL;
 
-char IP_addr[INET6_ADDRSTRLEN];
-pthread_mutex_t mutex_test;
 
-#if USE_AESD_CHAR_DEVICE
-#else
-timer_t timerid;
-#endif
+// Used the following thread details struct from previous assignment
+typedef struct thread_data{
 
-int serv_sock_fd,client_sock_fd,counter =1,output_file_fd;
-int finish;
-struct sockaddr_in conn_addr;
-int file_size;
+    pthread_t thread_index;
+    int client_fd;
+    char *buffer;
+    char *transmit_buffer;
+    sigset_t signal_mask;
+    bool thread_complete_success;
+    pthread_mutex_t *mutex;
+}thread_data_t;
+
+pthread_mutex_t main_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
+typedef struct slist_data_s slist_data_t;
+
+// slist strcuture
+struct slist_data_s {
+    thread_data_t thread_parameters;
+    SLIST_ENTRY(slist_data_s) entries;
+};
+
+slist_data_t *datap=NULL;
+
+SLIST_HEAD(slisthead, slist_data_s) head;
+
+
+// get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
@@ -69,528 +81,572 @@ void *get_in_addr(struct sockaddr *sa)
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-typedef struct sigsev_data{
-
-    int fd; 
-
-}sigsev_data;
-
-typedef struct{
-	pthread_mutex_t *lock;
-    bool thread_complete;
-    pthread_t threads;               
-    int client_socket;                          
-    char* data_buf;                    
-    char* send_data_buf;
-    sigset_t mask;
-}threadParams_t;
-
-typedef struct slist_data_s slist_data_t;
-struct slist_data_s{
-
-    threadParams_t threadParams;
-    SLIST_ENTRY(slist_data_s) entries;
-};
 
 
-slist_data_t *slist_ptr = NULL;
-SLIST_HEAD(slisthead,slist_data_s) head;
+void close_all()
+{
 
-void close_all(){
-
-     finish = 1;
-	//Functions called due to an error, hence close files errno not 
-	//checked in this function
-	//All close errors handled in signal handler when no error occured
-	close(serv_sock_fd);
-	
-	#if USE_AESD_CHAR_DEVICE
-	#else
-	//Close regular file - output file fd
-	close(output_file_fd);
-	
-	
-	//Delete and unlink the file
-    if(remove(TEST_FILE) != 0)
-    {
-        perror("file remove error");
-    }
+    terminate = 1;
+    close(socket_fd);
+    #ifndef USE_AESD_CHAR_DEVICE
+    close(write_fd);
+    remove(FILE_PATH);
     #endif
-    //After completing above procedure successfuly, exit logged
-	syslog(LOG_DEBUG,"Caught signal, exiting");
-	
+    closelog();
     
-    SLIST_FOREACH(slist_ptr,&head,entries)
+    //cancel threads which are not completed and free associated pointers
+    SLIST_FOREACH(datap,&head,entries)
     {
-        if (slist_ptr->threadParams.thread_complete != true)
-        {
-            pthread_cancel(slist_ptr->threadParams.threads);
-        }
+        if (datap->thread_parameters.thread_complete_success != true)
+	{
+ 	    pthread_cancel(datap->thread_parameters.thread_index);
+            free(datap->thread_parameters.buffer);
+            free(datap->thread_parameters.transmit_buffer);
+       	}
     }
-    
+
+    int rc  = pthread_mutex_destroy(&main_mutex);
+    if(rc != 0)
+    {
+	printf("failed in destroying mutex\n");
+    }
+
+
+    // free all linked list nodes
     while(!SLIST_EMPTY(&head))
     {
-        slist_ptr = SLIST_FIRST(&head);
+        datap = SLIST_FIRST(&head);
         SLIST_REMOVE_HEAD(&head,entries);
-        free(slist_ptr);
+        free(datap);
     }
-    //Destroy mutex created
-    pthread_mutex_destroy(&mutex_test); 
-    #if USE_AESD_CHAR_DEVICE
-    #else
-    //Delete timer created for 10 seconds          
-    timer_delete(timerid);               
-    #endif
-    //close the logging for aesdsocket                              
-    closelog();
 }
 
-static inline void timespec_add( struct timespec *result,
-                        const struct timespec *ts_1, const struct timespec *ts_2)
+
+/* handler for SIGINT and SIGTERM */
+static void signal_handler (int signo)
 {
-    result->tv_sec = ts_1->tv_sec + ts_2->tv_sec;
-    result->tv_nsec = ts_1->tv_nsec + ts_2->tv_nsec;
-    if( result->tv_nsec > 1000000000L ) {
-        result->tv_nsec -= 1000000000L;
+    if (signo == SIGINT || signo == SIGTERM) {
+	syslog(LOG_NOTICE, "Caught signal, exiting\n");
+	terminate = 1;
+	close(write_fd);
+	remove(FILE_PATH);
+	shutdown(socket_fd, SHUT_RDWR);
+    }
+    else {
+	/* this should never happen */
+	closelog();
+	fprintf (stderr, "Unexpected signal!\n");
+	exit (EXIT_FAILURE);
+    }
+
+    closelog();
+    exit (EXIT_SUCCESS);
+}
+
+int total_bytes = 0;
+int ptr_location = 0;
+void receive_send_data(void* thread_param)
+{
+
+
+    write_fd = open(FILE_PATH,O_RDWR | O_TRUNC | O_CREAT,0666);
+
+    if (write_fd == -1)
+    {
+        //printf("2\n");
+        syslog(LOG_ERR, "Error in opening file");
+        close(socket_fd);
+        closelog();
+        //free(buf);
+        //free(write_buf);
+        //return -1;
+    }
+
+	thread_data_t *thread_func_args = (thread_data_t*)thread_param;
+
+	int received_bytes, write_bytes;
+	int buf_loc = 0;
+	//int realloc_count = 1;
+	
+        thread_func_args->buffer = (char *)malloc(MAXDATASIZE*sizeof(char));
+        if(thread_func_args->buffer == NULL)
+        {
+                syslog(LOG_ERR, "thread_func_args malloc error\n");
+                close_all();
+        }
+
+        thread_func_args->transmit_buffer = (char *)malloc(MAXDATASIZE*sizeof(char));
+        if(thread_func_args->transmit_buffer == NULL)
+        {
+                syslog(LOG_ERR, "thread_func_args malloc error\n");
+                close_all();
+        }
+
+
+
+	//data receive from client
+	do
+	{
+                received_bytes = recv(thread_func_args->client_fd, thread_func_args->buffer, MAXDATASIZE - 1, 0); //sizeof(buffer)
+                if(received_bytes <= 0)
+                {
+                        syslog(LOG_ERR,"Error receiving\n");
+                } else {
+
+                buf_loc += received_bytes;
+
+                // increase buffer size dynamically if required
+               // realloc_count += 1;
+                //thread_func_args->buffer = (char *)realloc(thread_func_args->buffer, realloc_count*MAXDATASIZE*(sizeof(char)));
+                if(thread_func_args->buffer == NULL)
+                {
+                        close(thread_func_args->client_fd);
+                        close_all();
+                        syslog(LOG_ERR, "Realloc error\n");
+			 exit(EXIT_FAILURE);
+                }
+                
+             //   block mutex and signals
+       int rc;
+	rc = pthread_mutex_lock(&main_mutex); //lock mutex
+	if(rc != 0)
+	{
+		syslog(LOG_ERR,"Mutex lock failure\n");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+
+	// block the signals SIGINT and SIGTERM
+	rc = sigprocmask(SIG_BLOCK, &thread_func_args->signal_mask, NULL);
+	if(rc == -1)
+	{
+		printf("Error while blocking the signals SIGINT, SIGTERM");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+                
+                
+                
+                write_bytes = write(write_fd, thread_func_args->buffer, received_bytes);
+		if(received_bytes > 0 && write_bytes <= 0)
+		{
+		printf("Error in writing bytes\n");
+		close(thread_func_args->client_fd);
+		close_all();
+		exit (EXIT_FAILURE);
+		}
+		
+		
+		// unblock mutex and signals
+	rc = pthread_mutex_unlock(&main_mutex); // unlock mutex
+	if(rc != 0)
+	{
+		perror("Mutex unlock failed\n");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+
+	// unblock the signals SIGINT and SIGTERM
+	rc = sigprocmask(SIG_UNBLOCK, &thread_func_args->signal_mask, NULL);
+	if(rc == -1)
+	{
+		printf("Error while unblocking the signals SIGINT, SIGTERM");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+		
+		
+	}
+	}while(strchr(thread_func_args->buffer, '\n') == NULL);
+	//received_bytes = buf_loc;
+	thread_func_args->buffer[buf_loc] = '\0';
+	total_bytes += buf_loc; //keep track of total bytes
+
+#ifndef USE_AESD_CHAR_DEVICE
+	size  = lseek(write_fd,0,SEEK_END);
+#endif
+
+/*
+	printf("TOT_BYTES = %d\n\r", total_bytes);
+	thread_func_args->transmit_buffer = (char *)realloc(thread_func_args->transmit_buffer, total_bytes*sizeof(char));
+	if(thread_func_args->transmit_buffer == NULL)
+	{
+		close(thread_func_args->client_fd);
+		printf("Error while doing realloc\n");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+*/
+
+int read_and_send_bytes = 1;
+int read_offset = 0;
+//char read_byte_from_fd;
+do{
+
+	int rc;
+	rc = pthread_mutex_lock(&main_mutex); //lock mutex
+	if(rc != 0)
+	{
+		perror("Mutex lock failed\n");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+
+	// block the signals SIGINT and SIGTERM
+	rc = sigprocmask(SIG_BLOCK, &thread_func_args->signal_mask, NULL);
+	if(rc == -1)
+	{
+		printf("Error while blocking the signals SIGINT, SIGTERM");
+		close_all();
+		exit (EXIT_FAILURE);
+	}
+
+	//lseek(write_fd, read_offset, SEEK_SET);
+	while(thread_func_args->transmit_buffer[read_offset] != '\n')
+	{
+		read_and_send_bytes = read(write_fd, thread_func_args->transmit_buffer + read_offset, 1);
+		++read_offset;
+	}
+	
+	
+	
+	if(thread_func_args->transmit_buffer[read_offset] == '\n') {
+		if (send(thread_func_args->client_fd, thread_func_args->transmit_buffer+ptr_location,read_offset, 0) == -1) {
+			close(thread_func_args->client_fd);
+			printf("Error while sending bytes");
+			close_all();
+		}
+		ptr_location = read_offset;
+	}
+	    rc = pthread_mutex_unlock(&main_mutex); // unlock mutex
+    if(rc != 0)
+    {
+	perror("Mutex unlock failed\n");
+	close_all();
+	exit (EXIT_FAILURE);
+    }
+    // unblock the signals SIGINT and SIGTERM
+    rc = sigprocmask(SIG_UNBLOCK, &thread_func_args->signal_mask, NULL);
+    if(rc == -1)
+    {
+	printf("Error while unblocking the signals SIGINT, SIGTERM");
+	close_all();
+	exit (EXIT_FAILURE);
+    } 
+    
+} while (read_and_send_bytes > 0);
+
+    // close connection
+    close(thread_func_args->client_fd);
+    close(write_fd);
+    //syslog(LOG_DEBUG, "Closed connection from %s", ipstr);
+    free(thread_func_args->buffer);
+    free(thread_func_args->transmit_buffer);
+    thread_func_args->thread_complete_success = true;
+
+}
+
+//add timespecs and store in result
+
+#ifndef USE_AESD_CHAR_DEVICE
+static void timespec_add(const struct timespec *ts_a, const struct timespec *ts_b, struct timespec *result)
+{
+    result->tv_sec = ts_a->tv_sec + ts_b->tv_sec;
+    result->tv_nsec = ts_a->tv_nsec + ts_b->tv_nsec;
+    if( result->tv_nsec > 1000000000L )
+    {
+       	result->tv_nsec -= 1000000000L;
         result->tv_sec ++;
     }
 }
-#if USE_AESD_CHAR_DEVICE
-#else
-static void timer_handle(union sigval sigval){
 
-    struct sigsev_data* td = (struct sigsev_data*) sigval.sival_ptr;
 
-    char timer_buffer[100];
-    time_t rtime;
-    struct tm *info;
-    time(&rtime);
-    info = localtime(&rtime);                
 
-    int time_length= strftime(timer_buffer,100,"timestamp:%a, %d %b %Y %T %z\n",info);
 
-    if (pthread_mutex_lock(&mutex_test) == -1)
+//service every 10 seconds
+static void timer10sec_thread(union sigval sigval)
+{
+    char time_buffer[TIMER_BUFFER_SIZE];
+    time_t current_time;
+    struct tm *timer_info;
+    time(&current_time);
+    timer_info = localtime(&current_time);
+
+    int timer_buffer_size = strftime(time_buffer,TIMER_BUFFER_SIZE,"timestamp:%a, %d %b %Y %T %z\n",timer_info);
+
+    pthread_mutex_lock(&main_mutex);
+
+    // write to file
+    int timer_writebytes = write(write_fd,time_buffer,timer_buffer_size);
+    if(timer_writebytes == -1)
     {
-        perror("error pthread mutex lock");
-        close_all();
-        exit(-1);
-    }
-    
-    int test = write(td->fd,timer_buffer,time_length);
-    if (test == -1){
-        perror("error write");
+        printf("Error in writing time to file\n");
         close_all();
         exit(-1);
     }
 
-    if (pthread_mutex_unlock(&mutex_test) == -1)
-    {
-        perror("error pthread mutex unlock");
-        close_all();
-        exit(-1);
-    }
+    pthread_mutex_unlock(&main_mutex);
+
 }
 #endif
-static void signal_handler(int signo)
-{
-   if(signo == SIGINT || signo==SIGTERM) 
-    {
-		shutdown(serv_sock_fd,SHUT_RDWR);
-		finish = 1;    
-    }
-}
 
-void* handle_connection(void *threadp)
+int main(int argc, char *argv[])
 {
 
-    threadParams_t *thread_handle_sock = (threadParams_t*)threadp;
-    output_file_fd=open(TEST_FILE,O_CREAT|O_RDWR|O_APPEND,0644);
-	if(output_file_fd == -1)
-	{
-		perror("error opening file at /var/temp/aesdsocketdata");
-		exit(-1);
-	}
-    int loc=0,len=0;
-    thread_handle_sock->data_buf = malloc(CHUNK_SIZE * sizeof(char));
-    
-    if (sigprocmask(SIG_BLOCK,&(thread_handle_sock->mask),NULL) == -1)
-    {
-        perror("sigprocmask block error");
-        close_all();
-        exit(-1);
-    }
-    
-	while((len=recv(thread_handle_sock->client_socket , thread_handle_sock->data_buf + loc , CHUNK_SIZE , 0))>0)
-	{
-		if(len == -1)
-		{
-			perror("recv error");
-			close_all();
-			exit(-1);
-		}
-		//Update the current location if newline not found
-		loc+=len;
-		if(strchr(thread_handle_sock->data_buf ,'\n') != NULL)
-			break;
-		
-		
-		//if no new line character, need to add more memory and dynamically
-		//reallocate with an extra chunk
-		counter++;
-		thread_handle_sock->data_buf=(char*)realloc(thread_handle_sock->data_buf,((counter*CHUNK_SIZE)*sizeof(char)));
-		if(thread_handle_sock->data_buf==NULL)
-		{
-			syslog(LOG_ERR,"error realloc");
-			close_all();
-			exit(-1);
-		}
-	}
-	
-	if (sigprocmask(SIG_UNBLOCK,&(thread_handle_sock->mask),NULL) == -1)
-    {
-        perror("sigprocmask unblock error");
-        close_all();
-        exit(-1);
-    }
-    
-    
-
-    if (pthread_mutex_lock( thread_handle_sock->lock) == -1)
-    {
-        perror("mutex lock error");
-        close_all();
-        exit(-1);
-
-    }
-
-    if (sigprocmask(SIG_BLOCK,&(thread_handle_sock->mask),NULL) == -1)
-    {
-        perror("sigprocmask block error");
-        close_all();
-        exit(-1);
-    }
-
-    int werr = write(output_file_fd,thread_handle_sock->data_buf,loc);
-    if (werr == -1)
-    {
-        perror("write error");
-        close_all();
-        exit(-1);
-    }
-	file_size += werr;
-    if (sigprocmask(SIG_UNBLOCK,&(thread_handle_sock->mask),NULL) == -1)
-    {
-        perror("sigprocmask unblock error");
-        close_all();
-        exit(-1);
-    }
-    if(pthread_mutex_unlock(thread_handle_sock->lock) == -1)
-    {
-        perror("mutex unlock error");
-        close_all();
-        exit(-1);
-    }
-    
-    //compute file size
-    //int file_length=lseek(output_file_fd,BEGIN,SEEK_END);
-    thread_handle_sock->send_data_buf=malloc(CHUNK_SIZE * sizeof(char));
-    //syslog(LOG_DEBUG,"file_lenght not therefile_size %d",file_size);
-    //set back position to beginning after finding length
-    lseek(output_file_fd,BEGIN,SEEK_SET);
-    if(thread_handle_sock->send_data_buf == NULL)
-	{
-		perror("calloc error");
-		close_all();
-		exit(-1);
-	}
-    
-    if (pthread_mutex_lock( thread_handle_sock->lock) == -1)
-    {
-        perror("mutex lock error");
-        close_all();
-        exit(-1);
-
-    }
-
-    if (sigprocmask(SIG_BLOCK,&(thread_handle_sock->mask),NULL) == -1)
-    {
-        perror("sigprocmask block error");
-        close_all();
-        exit(-1);
-    }
-    
-    int read_byte_loc = 0 , send_data_offset=0, rbytes;
-    while((rbytes = read(output_file_fd,&thread_handle_sock->send_data_buf[read_byte_loc],1)) > 0)
-    {
-        if(thread_handle_sock->send_data_buf[read_byte_loc] == '\n')
-        {
-            int serr = send(thread_handle_sock->client_socket,thread_handle_sock->send_data_buf+send_data_offset,read_byte_loc - send_data_offset + 1, 0);
-            if(serr == -1)
-            {
-                perror("send error");
-                close_all();
-            }
-            send_data_offset = read_byte_loc + 1;
+    openlog("aesdsocket.c", LOG_PID, LOG_USER);
+    // Register signals with handler
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+    int rc;
+    int opt;
+    while ((opt = getopt(argc, argv,"d")) != -1) {
+        switch (opt) {
+            case 'd' :
+                daemon_arg = 1;
+                break;
+            default:
+                break;
         }
-        read_byte_loc++;
     }
-    //Only if rbytes negative error. If rerr =0 , can be end of file
-	if(rbytes<0)
-	{
-		perror("read error");
-		close_all();
-	}
-	
-	thread_handle_sock->thread_complete = true;
-    if (sigprocmask(SIG_UNBLOCK,&(thread_handle_sock->mask),NULL) == -1)
+
+    int reuse_addr =1;
+    sigset_t signal_set;
+    rc = sigemptyset(&signal_set);
+    if(rc == -1)
     {
-        perror("sigprocmask unblock error");
-        close_all();
-        exit(-1);
+	printf("Error while doing sigemptyset()");
+	return -1;
     }
-
-    if (pthread_mutex_unlock(thread_handle_sock->lock) == -1)
+    rc = sigaddset(&signal_set, SIGINT);
+    if(rc == -1)
     {
-
-        perror("mutex unlock error");
-        close_all();
-        exit(-1);
+        printf("Error while adding SIGINT to sigaddset()");
+        return -1;
     }
-    
-    close(output_file_fd);
-    close(thread_handle_sock->client_socket);
-    //Clear both buffers used
-    free(thread_handle_sock->data_buf);
-    free(thread_handle_sock->send_data_buf);
-    return threadp;
-}
 
-
-
-int main(int argc, char* argv[])
-{
-
-	//Opens a connection with facility as LOG_USER to Syslog.
-	openlog("aesdsocket",0,LOG_USER);
-
-    SLIST_INIT(&head);
-
-    //With node as null and ai_flags as AI_PASSIVE, the socket address 
-	//will be suitable for binding a socket that will accept connections
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-	struct addrinfo *res;
-	
-	//Node NULL and service set with port number as 9000, the pointer to
-	//linked list returned and stored in res
-	if (getaddrinfo(NULL, PORT , &hints, &res) != 0) 
-	{
-		perror("getaddrinfo error");
-		exit(-1);
-	}
-
-    //Creating an end point for communication with type = SOCK_STREAM(connection oriented)
-	//and protocol =0 which allows to use appropriate protocol (TCP) here
-	serv_sock_fd=socket(res->ai_family,res->ai_socktype,res->ai_protocol);
-	if(serv_sock_fd==-1)
-	{
-		perror("socket error");
-		exit(-1);
-	}
-		
-	//Set options on socket to prevent binding errors from ocurring
-	int dummie =1;
-	if (setsockopt(serv_sock_fd, SOL_SOCKET, SO_REUSEADDR, &dummie, sizeof(int)) == -1) 
-	{	
-		perror("setsockopt error");
-    }
-    
-	//Assign address to the socket created
-	int rc=bind(serv_sock_fd, res->ai_addr, res->ai_addrlen);
-	if(rc==-1)
-	{
-		perror("bind error");
-		exit(-1);
-	}
-  
-    freeaddrinfo(res);
-
-	//Registering signal_handler as the handler for the signals SIGTERM 
-	//and SIGINT
-	//Reference: Ch 10 signals, Textbook: Linux System Programming
-	sigset_t socket_set;
-	if (signal(SIGINT, signal_handler) == SIG_ERR) 
-	{
-		fprintf (stderr, "Cannot handle SIGINT\n");
-		exit (EXIT_FAILURE);
-	}
-	
-	if (signal(SIGTERM, signal_handler) == SIG_ERR) 
-	{
-		fprintf (stderr, "Cannot handle SIGTERM\n");
-		exit (EXIT_FAILURE);
-	}
-
-	//Adding only signals SIGINT and SIGTERM to an empty set to enable only them
-	rc = sigemptyset(&socket_set);
-	if(rc !=0)
-	{
-		perror("signal empty set error");
-		exit(-1);
-	}
-	
-	rc = sigaddset(&socket_set,SIGINT);
-	if(rc !=0)
-	{
-		perror("error adding signal SIGINT to set");
-		exit(-1);
-	}
-	
-	rc = sigaddset(&socket_set,SIGTERM);
-	if(rc !=0)
-	{
-		perror("error adding signal SIGTERM to set");
-		exit(-1);
-	}  
-
-	//Post binding, the server is running on the port 9000, so now
-	//remote connections (client) can listen to server
-	//Backlog - queue of incoming connections before being accepted to send/recv 
-	//backlog set as 4, can be reduced to a lower number since we get only 1 connection
-	if(listen(serv_sock_fd,BACKLOG)==-1)
-	{
-		perror("error listening");
-		exit(-1);
-	}
-	
-	
-	
-    //#endif
-    if (pthread_mutex_init(&mutex_test,NULL) != 0)
+    rc = sigaddset(&signal_set, SIGTERM);
+    if(rc == -1)
     {
-        perror("dynamic mutex init error");
-        close_all();
-        exit(-1);
-    } 
+        printf("Error while adding SIGTERM to sigaddset()");
+        return -1;
+    }
+    socket_fd = socket(PF_INET, SOCK_STREAM, 0);
+    if(socket_fd == -1)
+    {
+	syslog(LOG_ERR, "Error in capturing socket file descriptor\n");
+	closelog();
+	return -1;
+    }
 
-    //Below conditional check referenced from https://stackoverflow.com/questions/803776/help-comparing-an-argv-string
-	if(argc==2 && (!strcmp(argv[1], "-d")))
-	{
-		//Below code reference from chapter 5 of textbook reference
-		//Child forked to create a daemon custom named customd
-		pid_t customd;
-		customd = fork();
-		if (customd == -1)
-		{
-			perror("fork error");
-			exit(-1);
-		}
-		else if (customd != 0 )
-		{
-			//Exit parent, to make child get reparented to init_parent
-			exit (EXIT_SUCCESS);
-		}
+       // Reuse address
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(int)) == -1) {
+        syslog(LOG_ERR, "setsockopt");
+        close(socket_fd);
+	closelog();
+        return -1;
+    }
 
-		//Create new session and process group
-		if(setsid() == -1) 
-		{
-			perror("setsid");
-			exit(-1);
-		}
-		
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;  // use IPv4 or IPv6, whichever
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
 
-		//Set working to root directory
-		if (chdir("/") == -1)
-		{
-			exit(-1);
-		}
-		
-		//Should close if any open files, skipping that helre
-		//Redirect Stdin,stdout,stderr to /dev/null
-		open ("/dev/null", O_RDWR); 
-		dup (0); 
-		dup (0); 
-	}
 
-	#if USE_AESD_CHAR_DEVICE
-	#else
-	//Below timer reference : https://github.com/cu-ecen-aeld/aesd-lectures/blob/master/lecture9/timer_thread.c
+    if(getaddrinfo(NULL, PORT_NUMBER, &hints, &res) != 0)
+    {
+	syslog(LOG_ERR, "Error in capturing address info\n");
+	close(socket_fd);
+	closelog();
+	return -1;
+    }
+
+    if(bind(socket_fd, res->ai_addr, res->ai_addrlen) == -1)
+    {
+	syslog(LOG_ERR, "Error in binding\n");
+	close(socket_fd);
+	closelog();
+	return -1;
+    }
+
+    freeaddrinfo(res); // free the linked list
+
+    if(daemon_arg)
+    {
+    	int pid = fork();
+
+    	if (pid < 0 )
+	    syslog(LOG_ERR, "Forking error\n");
+
+    	if(pid > 0)
+    	{
+	    syslog(LOG_DEBUG, "Daemon created\n");
+	    exit(EXIT_SUCCESS);
+    	}
+    	if(pid == 0)
+    	{
+	    int sid = setsid();
+
+            if(sid == -1)
+	    {
+	    	syslog(LOG_ERR, "Error in setting sid\n");
+		close(socket_fd);
+		closelog();
+	    	exit(EXIT_FAILURE);
+	    }
+
+            if (chdir("/") == -1)
+	    {
+            	syslog(LOG_ERR, "chdir");
+            	close(socket_fd);
+		closelog();
+            	exit(EXIT_FAILURE);
+            }
+
+    	    int dev_null_fd = open("/dev/null", O_RDWR);
+            dup2(dev_null_fd, STDIN_FILENO);
+            dup2(dev_null_fd, STDOUT_FILENO);
+            dup2(dev_null_fd, STDERR_FILENO);
+
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+    	}
+    }
+
+    // setup timer
+#ifndef USE_AESD_CHAR_DEVICE
     struct sigevent sev;
-    sigsev_data td;
-    td.fd = output_file_fd;
+
     memset(&sev,0,sizeof(struct sigevent));
+
     sev.sigev_notify = SIGEV_THREAD;
-    sev.sigev_value.sival_ptr = &td;
-    sev.sigev_notify_function = timer_handle;
-    if ( timer_create(CLOCK_MONOTONIC,&sev,&timerid) != 0 ) 
+    sev.sigev_notify_function = timer10sec_thread;
+    timer_t timer_id;
+
+    rc = timer_create(CLOCK_MONOTONIC,&sev,&timer_id);
+    if(rc == -1)
     {
-        perror("timer create error");
+        printf("Error in timer_create()\n");
+        close_all();
     }
     struct timespec start_time;
 
-    if ( clock_gettime(CLOCK_MONOTONIC,&start_time) != 0 ) 
+    rc = clock_gettime(CLOCK_MONOTONIC,&start_time);
+    if(rc == -1)
     {
-        perror("clock gettime error");
-    } 
+        printf("Error in clock_gettime()\n");
+        close_all();
+    }
+
 
     struct itimerspec itimerspec;
-    itimerspec.it_value.tv_sec = 10;
-    itimerspec.it_value.tv_nsec = 0;
     itimerspec.it_interval.tv_sec = 10;
-    itimerspec.it_interval.tv_nsec = 0;    
-    
-    if( timer_settime(timerid, TIMER_ABSTIME, &itimerspec, NULL ) != 0 ) 
+    itimerspec.it_interval.tv_nsec = 0;
+
+    timespec_add(&start_time, &itimerspec.it_interval, &itimerspec.it_value);
+
+    rc = timer_settime(timer_id, TIMER_ABSTIME, &itimerspec, NULL);
+    if(rc == -1 )
     {
-        perror("settime error");
-    } 
-	#endif
-    slist_data_t *temp_node = NULL;
+       	printf("Error in timer_settime()\n");
+        close_all();
+    }
+#endif
 
-    while(1) 
+
+    if(listen(socket_fd,BACKLOG_CONNECTIONS) == -1)
     {
-		socklen_t conn_addr_len = sizeof(conn_addr);
-		//Accept an incoming connection
-		client_sock_fd = accept(serv_sock_fd,(struct sockaddr *)&conn_addr,&conn_addr_len);
-		if(client_sock_fd ==-1)
-		{
-			//If no incoming connection, graceful termination done
-			perror("client error");
+	syslog(LOG_ERR, "Error in listen\n");
+        close(socket_fd);
+        closelog();
 
-		}
-		if(finish) 
-			break;
+	return -1;
+    }
 
-		//Below line of code reference: https://beej.us/guide/bgnet/html/
-		//Check if the connection address family is IPv4 or IPv6 and retrieve accordingly
-		//Convert the binary to text before logging 
-		inet_ntop(AF_INET, get_in_addr((struct sockaddr *)&conn_addr), IP_addr, sizeof(IP_addr));
-        syslog(LOG_DEBUG,"Accepted connection from %s", IP_addr);
+    struct sockaddr_storage their_addr;
+    socklen_t addr_size;
+    addr_size = sizeof(their_addr);
 
-		slist_ptr = (slist_data_t*)malloc(sizeof(slist_data_t));
-		SLIST_INSERT_HEAD(&head,slist_ptr,entries);                                          
-		slist_ptr->threadParams.client_socket = client_sock_fd;
-		slist_ptr->threadParams.thread_complete = false;
-		//slist_ptr->threadParams.fd=output_file_fd;
-		slist_ptr->threadParams.mask = socket_set;
-		slist_ptr->threadParams.lock = &mutex_test;
+    // This variable contains total bytes transferred over all connections
+    //int check_tot = 0;
+    //int realloc_count = 1;
 
-		pthread_create(&(slist_ptr->threadParams.threads),NULL,&handle_connection,(void*)&(slist_ptr->threadParams));
 
-		SLIST_FOREACH_SAFE(slist_ptr,&head,entries,temp_node )
-		{
-			pthread_join(slist_ptr->threadParams.threads,NULL);
-			if (slist_ptr->threadParams.thread_complete == true)
-			{
-				SLIST_REMOVE(&head,slist_ptr,slist_data_s,entries);
-				free(slist_ptr);
-				slist_ptr=NULL;
-			}
-		}
+    //char *buf;
+
+    //buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+
+
+    //char * write_buf;
+    //write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+#ifndef USE_AESD_CHAR_DEVICE
+    write_fd = open(FILE_PATH,O_RDWR | O_TRUNC | O_CREAT,0666);
+
+    if (write_fd == -1)
+    {
+        //printf("2\n");
+        syslog(LOG_ERR, "Error in opening file");
+        close(socket_fd);
+        closelog();
+        //free(buf);
+        //free(write_buf);
+        return -1;
+    }
+#endif
+
+    SLIST_INIT(&head);
+
+    while(!terminate)
+    {
+
+	client_fd = accept(socket_fd, (struct sockaddr *)&their_addr, &addr_size);
+
+	if(client_fd == -1)
+	{
+	//	printf("1\n");
+	    syslog(LOG_ERR, "Error in retrieving client fd\n");
+            close(socket_fd);
+            closelog();
+	    return -1;
 	}
-	close_all();
-	return 0;
-}
 
+	inet_ntop(AF_INET, get_in_addr((struct sockaddr *)&their_addr), ipstr, sizeof ipstr);
+        syslog(LOG_DEBUG,"Accepted connection from %s", ipstr);
+
+	datap = (slist_data_t*)malloc(sizeof(slist_data_t));
+	if(datap == NULL)
+	{
+	    printf("Error while doing malloc\n");
+            close(socket_fd);
+            close(write_fd);
+            closelog();
+            remove(FILE_PATH);
+            return -1;
+	}
+
+
+	SLIST_INSERT_HEAD(&head, datap, entries);
+	datap->thread_parameters.client_fd = client_fd;
+	datap->thread_parameters.thread_complete_success = false;
+	datap->thread_parameters.signal_mask = signal_set;
+	datap->thread_parameters.mutex = &main_mutex;
+	//int numbytes = 0;
+
+	rc = pthread_create(&(datap->thread_parameters.thread_index), NULL, (void *)&receive_send_data, (void *) &(datap->thread_parameters)); // create pthread
+	if(rc != 0)
+	{
+	    printf("Error while creating pthread\n");
+            close_all();
+            return -1;
+	}
+
+	SLIST_FOREACH(datap, &head, entries)
+	{
+     	    if(datap->thread_parameters.thread_complete_success == true)
+	    {
+		pthread_join(datap->thread_parameters.thread_index, NULL); // join threads if completed
+	    }
+    	}
+    }
+    return 0;
+}
