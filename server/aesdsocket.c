@@ -24,8 +24,16 @@
 #define PORT_NUMBER "9000"
 #define BACKLOG_CONNECTIONS 6
 #define MAXDATASIZE 500 // max number of bytes we can get at once
-#define FILE_PATH "/var/tmp/aesdsocketdata"
+
 #define TIMER_BUFFER_SIZE 100
+
+#define USE_AESD_CHAR_DEVICE 1
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define FILE_PATH "/dev/aesdchar"
+#else
+#define FILE_PATH "/var/tmp/aesdsocketdata"
+#endif
 
 int socket_fd, client_fd, write_fd;
 struct addrinfo hints, *res;
@@ -80,9 +88,12 @@ void close_all()
 
     terminate = 1;
     close(socket_fd);
+    #ifndef USE_AESD_CHAR_DEVICE
     close(write_fd);
-    closelog();
     remove(FILE_PATH);
+    #endif
+    closelog();
+    
     //cancel threads which are not completed and free associated pointers
     SLIST_FOREACH(datap,&head,entries)
     {
@@ -132,16 +143,31 @@ static void signal_handler (int signo)
     exit (EXIT_SUCCESS);
 }
 
-
+int total_bytes = 0;
+int ptr_location = 0;
 void receive_send_data(void* thread_param)
 {
 
+
+    write_fd = open(FILE_PATH,O_RDWR | O_TRUNC | O_CREAT,0666);
+
+    if (write_fd == -1)
+    {
+        //printf("2\n");
+        syslog(LOG_ERR, "Error in opening file");
+        close(socket_fd);
+        closelog();
+        //free(buf);
+        //free(write_buf);
+        //return -1;
+    }
+
 	thread_data_t *thread_func_args = (thread_data_t*)thread_param;
 
-	int received_bytes, write_bytes, read_bytes, send_bytes;
+	int received_bytes, write_bytes;
 	int buf_loc = 0;
-	int realloc_count = 1;
-
+	//int realloc_count = 1;
+	
         thread_func_args->buffer = (char *)malloc(MAXDATASIZE*sizeof(char));
         if(thread_func_args->buffer == NULL)
         {
@@ -161,32 +187,27 @@ void receive_send_data(void* thread_param)
 	//data receive from client
 	do
 	{
-                received_bytes = recv(thread_func_args->client_fd, thread_func_args->buffer + buf_loc, MAXDATASIZE, 0); //sizeof(buffer)
+                received_bytes = recv(thread_func_args->client_fd, thread_func_args->buffer, MAXDATASIZE - 1, 0); //sizeof(buffer)
                 if(received_bytes <= 0)
                 {
                         syslog(LOG_ERR,"Error receiving\n");
-                }
+                } else {
 
                 buf_loc += received_bytes;
 
                 // increase buffer size dynamically if required
-                realloc_count += 1;
-                thread_func_args->buffer = (char *)realloc(thread_func_args->buffer, realloc_count*MAXDATASIZE*(sizeof(char)));
+               // realloc_count += 1;
+                //thread_func_args->buffer = (char *)realloc(thread_func_args->buffer, realloc_count*MAXDATASIZE*(sizeof(char)));
                 if(thread_func_args->buffer == NULL)
                 {
                         close(thread_func_args->client_fd);
                         close_all();
                         syslog(LOG_ERR, "Realloc error\n");
-			exit(EXIT_FAILURE);
+			 exit(EXIT_FAILURE);
                 }
-
-
-	}while(strchr(thread_func_args->buffer, '\n') == NULL);
-	received_bytes = buf_loc;
-	thread_func_args->buffer[received_bytes] = '\0';
-	//total_bytes += received_bytes; //keep track of total bytes
-
-	int rc;
+                
+             //   block mutex and signals
+       int rc;
 	rc = pthread_mutex_lock(&main_mutex); //lock mutex
 	if(rc != 0)
 	{
@@ -203,17 +224,20 @@ void receive_send_data(void* thread_param)
 		close_all();
 		exit (EXIT_FAILURE);
 	}
-
-	// write to the file
-	write_bytes = write(write_fd, thread_func_args->buffer, received_bytes);
-	if(write_bytes < 0)
-	{
+                
+                
+                
+                write_bytes = write(write_fd, thread_func_args->buffer, received_bytes);
+		if(received_bytes > 0 && write_bytes <= 0)
+		{
 		printf("Error in writing bytes\n");
 		close(thread_func_args->client_fd);
 		close_all();
 		exit (EXIT_FAILURE);
-	}
-
+		}
+		
+		
+		// unblock mutex and signals
 	rc = pthread_mutex_unlock(&main_mutex); // unlock mutex
 	if(rc != 0)
 	{
@@ -230,9 +254,21 @@ void receive_send_data(void* thread_param)
 		close_all();
 		exit (EXIT_FAILURE);
 	}
+		
+		
+	}
+	}while(strchr(thread_func_args->buffer, '\n') == NULL);
+	//received_bytes = buf_loc;
+	thread_func_args->buffer[buf_loc] = '\0';
+	total_bytes += buf_loc; //keep track of total bytes
 
-	int size  = lseek(write_fd,0,SEEK_END);
-	thread_func_args->transmit_buffer = (char *)realloc(thread_func_args->transmit_buffer, size*sizeof(char));
+#ifndef USE_AESD_CHAR_DEVICE
+	size  = lseek(write_fd,0,SEEK_END);
+#endif
+
+/*
+	printf("TOT_BYTES = %d\n\r", total_bytes);
+	thread_func_args->transmit_buffer = (char *)realloc(thread_func_args->transmit_buffer, total_bytes*sizeof(char));
 	if(thread_func_args->transmit_buffer == NULL)
 	{
 		close(thread_func_args->client_fd);
@@ -240,7 +276,14 @@ void receive_send_data(void* thread_param)
 		close_all();
 		exit (EXIT_FAILURE);
 	}
+*/
 
+int read_and_send_bytes = 1;
+int read_offset = 0;
+//char read_byte_from_fd;
+do{
+
+	int rc;
 	rc = pthread_mutex_lock(&main_mutex); //lock mutex
 	if(rc != 0)
 	{
@@ -258,25 +301,24 @@ void receive_send_data(void* thread_param)
 		exit (EXIT_FAILURE);
 	}
 
-	lseek(write_fd, 0, SEEK_SET); //set cursor to start
-	read_bytes = read(write_fd, thread_func_args->transmit_buffer, size); //read bytes
-	if(read_bytes < 0)
+	//lseek(write_fd, read_offset, SEEK_SET);
+	while(thread_func_args->transmit_buffer[read_offset] != '\n')
 	{
-		close(thread_func_args->client_fd);
-		printf("Error in reading bytes\n");
-		close_all();
-		exit (EXIT_FAILURE);
+		read_and_send_bytes = read(write_fd, thread_func_args->transmit_buffer + read_offset, 1);
+		++read_offset;
 	}
-
-    send_bytes = send(thread_func_args->client_fd, thread_func_args->transmit_buffer, read_bytes, 0);//send bytes
-    if(send_bytes < 0)
-    {
-	close(thread_func_args->client_fd);
-	printf("Error in sending bytes\n");
-	close_all();
-	exit (EXIT_FAILURE);
-    }
-    rc = pthread_mutex_unlock(&main_mutex); // unlock mutex
+	
+	
+	
+	if(thread_func_args->transmit_buffer[read_offset] == '\n') {
+		if (send(thread_func_args->client_fd, thread_func_args->transmit_buffer+ptr_location,read_offset, 0) == -1) {
+			close(thread_func_args->client_fd);
+			printf("Error while sending bytes");
+			close_all();
+		}
+		ptr_location = read_offset;
+	}
+	    rc = pthread_mutex_unlock(&main_mutex); // unlock mutex
     if(rc != 0)
     {
 	perror("Mutex unlock failed\n");
@@ -290,9 +332,13 @@ void receive_send_data(void* thread_param)
 	printf("Error while unblocking the signals SIGINT, SIGTERM");
 	close_all();
 	exit (EXIT_FAILURE);
-    }
+    } 
+    
+} while (read_and_send_bytes > 0);
+
     // close connection
     close(thread_func_args->client_fd);
+    close(write_fd);
     //syslog(LOG_DEBUG, "Closed connection from %s", ipstr);
     free(thread_func_args->buffer);
     free(thread_func_args->transmit_buffer);
@@ -301,6 +347,8 @@ void receive_send_data(void* thread_param)
 }
 
 //add timespecs and store in result
+
+#ifndef USE_AESD_CHAR_DEVICE
 static void timespec_add(const struct timespec *ts_a, const struct timespec *ts_b, struct timespec *result)
 {
     result->tv_sec = ts_a->tv_sec + ts_b->tv_sec;
@@ -311,6 +359,7 @@ static void timespec_add(const struct timespec *ts_a, const struct timespec *ts_
         result->tv_sec ++;
     }
 }
+
 
 
 
@@ -339,6 +388,7 @@ static void timer10sec_thread(union sigval sigval)
     pthread_mutex_unlock(&main_mutex);
 
 }
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -464,7 +514,7 @@ int main(int argc, char *argv[])
     }
 
     // setup timer
-
+#ifndef USE_AESD_CHAR_DEVICE
     struct sigevent sev;
 
     memset(&sev,0,sizeof(struct sigevent));
@@ -488,6 +538,7 @@ int main(int argc, char *argv[])
         close_all();
     }
 
+
     struct itimerspec itimerspec;
     itimerspec.it_interval.tv_sec = 10;
     itimerspec.it_interval.tv_nsec = 0;
@@ -500,7 +551,7 @@ int main(int argc, char *argv[])
        	printf("Error in timer_settime()\n");
         close_all();
     }
-
+#endif
 
 
     if(listen(socket_fd,BACKLOG_CONNECTIONS) == -1)
@@ -521,15 +572,15 @@ int main(int argc, char *argv[])
     //int realloc_count = 1;
 
 
-    char *buf;
+    //char *buf;
 
-    buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+    //buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
 
 
-    char * write_buf;
-    write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
-
-    write_fd = open(FILE_PATH, O_RDWR | O_APPEND | O_CREAT, S_IRWXU);
+    //char * write_buf;
+    //write_buf = (char *)malloc(sizeof(char) * MAXDATASIZE);
+#ifndef USE_AESD_CHAR_DEVICE
+    write_fd = open(FILE_PATH,O_RDWR | O_TRUNC | O_CREAT,0666);
 
     if (write_fd == -1)
     {
@@ -537,11 +588,11 @@ int main(int argc, char *argv[])
         syslog(LOG_ERR, "Error in opening file");
         close(socket_fd);
         closelog();
-        free(buf);
-        free(write_buf);
+        //free(buf);
+        //free(write_buf);
         return -1;
     }
-
+#endif
 
     SLIST_INIT(&head);
 

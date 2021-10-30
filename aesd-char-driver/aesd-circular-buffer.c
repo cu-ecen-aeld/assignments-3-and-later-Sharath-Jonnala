@@ -36,8 +36,11 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 
     //size_t temp_offset = char_offset;
     //--char_offset;
+
+
     int temp = 0;
-    for(uint8_t i = buffer->out_offs; temp < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ; i = (i +1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+    int i;
+    for(i = buffer->out_offs; temp < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ; i = (i +1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
     {
 	++temp;
 	if(char_offset < buffer->entry[i].size)
@@ -52,6 +55,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 	}
     }
     return NULL;
+
 }
 
 /**
@@ -61,28 +65,38 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char * aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
+
+    const char* overwritten_byte = NULL;
     /**
     * TODO: implement per description
     */
+    
+    if(buffer == NULL || add_entry->buffptr == NULL || add_entry->size == 0) //check for null pointer and size of 0 
+    {
+       return NULL;
+    }
+    
+    if(buffer->full)
+    {
+	overwritten_byte = buffer->entry[buffer->out_offs].buffptr;
+    }
 
     buffer->entry[buffer->in_offs] = *add_entry;
 
-   // buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 
     if(buffer->full)
     {
 	buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
-    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-
     if(buffer->in_offs == buffer->out_offs)
     {
 	buffer->full = true;
     }
-
+    return overwritten_byte;
 }
 
 /**
@@ -95,4 +109,26 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer)
     buffer->out_offs =0;
     buffer->full =false;
 
+}
+
+void aesd_circular_buffer_free(struct aesd_circular_buffer *buffer)
+{
+
+    uint8_t index;
+    uint8_t temp = 0;
+
+   for(index = buffer->out_offs; temp < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED ; index = (index +1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+    {
+        ++temp;
+        if( buffer->entry[index].buffptr != NULL)
+        {
+
+            #ifdef __KERNEL__
+                kfree(buffer->entry[index].buffptr);
+            #else
+                free((void *)buffer->entry[index].buffptr);
+            #endif
+        }
+
+    }
 }
